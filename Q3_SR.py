@@ -97,9 +97,10 @@ class SRReceiver:
         self.buffer = {}
         self.received = [False] * num_packets
         self.delivered_count = 0
+        self.finished = False
 
     def run(self):
-        while self.delivered_count < self.num_packets:
+        while not self.finished:
             try:
                 pkt = self.channel.to_receiver_queue.get(timeout=0.1)
                 if not pkt.verify_checksum():
@@ -138,9 +139,10 @@ class SRReceiver:
             except Empty:
                 continue
 
-num_packets=8
-N=4
-k=3
+
+num_packets= int(input("Enter number of packets: "))
+N= int(input ("Enter Window size(N): "))
+k= int(input ("Enter Sequence number bits(K): "))
 loss_prob=0.1
 corrupt_prob=0.1
 delay_prob=0.1
@@ -164,6 +166,7 @@ rec_thread.start()
 snd_thread.start()
 
 snd_thread.join()
+receiver.finished = True
 rec_thread.join()
 
 print("=" * 80)
