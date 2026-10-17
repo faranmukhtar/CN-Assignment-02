@@ -14,10 +14,10 @@ class SRSender:
         self.k = k 
         self.mod = 2 ** k
         self.timeout_sec = timeout_sec
-
-    
         self.send_base = 0
         self.nextseqnum = 0
+        self.transmissions = 0
+        self.retransmissions = 0
 
         self.packets = [Packet(seq_num=i % self.mod, payload=f"Data_{i}") for i in range(num_packets)]
         self.acked = [False] * num_packets
@@ -51,6 +51,8 @@ class SRSender:
                 self.start_packet_timer(pkt_idx)
                 log(f"[RETRANSMIT] SR Resending missing Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
                 self.send_packet(pkt)
+                self.retransmissions = self.retransmissions +1
+                self.transmissions = self.transmissions +1
 
     def run(self):
         self.running = True
@@ -65,8 +67,9 @@ class SRSender:
                     self.start_packet_timer(self.nextseqnum)
                     self.send_packet(pkt)
                     self.nextseqnum += 1
+                    self.transmissions = self.transmissions +1
+                    
             time.sleep(0.01)
-
         self.running = False
         ack_thread.join()
 
@@ -78,7 +81,6 @@ class SRSender:
                 if not ack_packet.verify_checksum():
                     log(f"[CORRUPT DISCARD] SR Sender discarded corrupted ACK")
                     continue
-
                 log(f"[ACK RECEIVE] SR Sender received Individual ACK (ack={ack_packet.ack_num})")
                 with self.lock:
                     for idx in range(self.send_base, min(self.send_base + self.N, self.num_packets)):
@@ -100,7 +102,6 @@ class SRReceiver:
         self.N = N
         self.k = k
         self.mod = 2 ** k
-
         self.rcv_base = 0
         self.buffer = {}
         self.received = [False] * num_packets
@@ -122,9 +123,7 @@ class SRReceiver:
                 if not pkt.verify_checksum():
                     log(f"[CORRUPT DISCARD] SR Receiver discarded corrupted Packet (seq={pkt.seq_num})")
                     continue
-
                 log(f"[RECEIVE] SR Receiver got Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
-
                 found_idx = -1
                 for idx in range(self.rcv_base, min(self.rcv_base + self.N, self.num_packets)):
                     if (idx % self.mod) == pkt.seq_num:
@@ -159,16 +158,19 @@ class SRReceiver:
             except socket.timeout:
                 continue
 
-
 print("SR Implementation Faran Mukhtar - 24k-0646")
 num_packets= int(input("Enter number of packets: "))
 N= int(input ("Enter Window size(N): "))
 k= int(input ("Enter Sequence number bits(K): "))
-loss_prob=0.1
-corrupt_prob=0
-delay_prob=0
-delay_sec=0
+
+
+
+loss_prob=0.05
+corrupt_prob=0.05
+delay_prob=0.1
+delay_sec=0.2
 timeout_sec=0.8
+
 
 print("=" * 80)
 print(f"RUNNING SR SIMULATION | Packets: {num_packets} | Window N: {N} | k-bits: {k} (mod {2**k})")
@@ -177,14 +179,11 @@ print("=" * 80)
 
 random.seed(ROLL)
 channel = UnreliableChannel(loss_prob, corrupt_prob, delay_prob, delay_sec)
-
 sender = SRSender(num_packets, N, k, timeout_sec)
 receiver = SRReceiver(num_packets, N, k)
-
 chan_thread = threading.Thread(target=channel.run)
 rec_thread = threading.Thread(target=receiver.run)
 snd_thread = threading.Thread(target=sender.run)
-
 start = time.perf_counter()
 
 chan_thread.start()
@@ -204,5 +203,6 @@ channel.sock.close()
 
 print("=" * 80)
 print(f"SUCCESS: All {num_packets} packets transmitted and delivered!")
+print(f"Transmissions: {sender.transmissions} , Retransmissions : {sender.retransmissions}")
 print(f"Time elapsed: {elapsed}")
 print("=" * 80 + "\n")

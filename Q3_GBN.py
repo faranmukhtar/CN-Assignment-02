@@ -13,20 +13,19 @@ class GBNSender:
         self.k = k  
         self.mod = 2 ** k
         self.timeout_sec = timeout_sec
-
         self.base = 0
         self.nextseqnum = 0
         self.packet_idx = 0
         self.total_acked = 0
-
+        self.retransmit = 0
         self.packets = [Packet(seq_num=i % self.mod, payload=f"Data_{i}") for i in range(num_packets)]
         self.lock = threading.Lock()
         self.timer = None
         self.running = False
-
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(SENDER_ADDR)
         self.sock.settimeout(0.1)
+        self.transmission = 0
 
     def send_packet(self, pkt):
         self.sock.sendto(pkt.to_bytes(), CHANNEL_ADDR)
@@ -50,6 +49,8 @@ class GBNSender:
             for idx in range(self.total_acked, self.packet_idx):
                 pkt = self.packets[idx]
                 log(f"[RETRANSMIT] GBN Resending Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
+                self.retransmit = self.retransmit+1
+                self.transmission = self.transmission +1
                 self.send_packet(pkt)
 
     def run(self):
@@ -62,6 +63,8 @@ class GBNSender:
                 if (self.packet_idx - self.total_acked < self.N) and (self.packet_idx < self.num_packets):
                     pkt = self.packets[self.packet_idx]
                     log(f"[SEND] GBN Sender sent Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
+                    self.transmission = self.transmission +1
+
                     if self.total_acked == self.packet_idx:
                         self.start_timer()
                     self.packet_idx += 1
@@ -153,19 +156,22 @@ print("GBN Implementation Faran Mukhtar - 24k-0646")
 num_packets= int(input("Enter number of packets: "))
 N= int(input ("Enter Window size(N): "))
 k= int(input ("Enter Sequence number bits(K): "))
-loss_prob=0
-corrupt_prob=0
-delay_prob=0
-delay_sec=0
+
+
+
+loss_prob=0.05
+corrupt_prob=0.05
+delay_prob=0.1
+delay_sec=0.2
 timeout_sec=0.8
+
+
 print("=" * 80)
 print(f"RUNNING GBN SIMULATION | Packets: {num_packets} | Window N: {N} | k-bits: {k} (mod {2**k})")
 print(f"Channel Errors -> Loss: {loss_prob} | Corrupt: {corrupt_prob} | Delay: {delay_prob} ({delay_sec}s) | Timeout: {timeout_sec}s")
 print("=" * 80)
-
 random.seed(ROLL)
 channel = UnreliableChannel(loss_prob, corrupt_prob, delay_prob, delay_sec)
-
 sender = GBNSender(num_packets, N, k, timeout_sec)
 receiver = GBNReceiver(num_packets, k)
 
@@ -189,9 +195,10 @@ elapsed = time.perf_counter() - start
 sender.sock.close()
 receiver.sock.close()
 channel.sock.close()
-
 print("=" * 80)
 print(f"SUCCESS: All {num_packets} packets transmitted and delivered!")
+print(f"Transmissions: {sender.transmission} , Retransmissions : {sender.retransmit}")
+
 print(f"Time elapsed: {elapsed}")
 
 print("=" * 80 + "\n")
