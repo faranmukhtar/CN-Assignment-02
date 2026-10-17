@@ -6,6 +6,10 @@ from Q3_COMMON import Packet , UnreliableChannel
 # MY ROLE NUMBER IS 24k-0646 so seed is set to 646
 ROLL = 646
 
+import time
+
+start = time.perf_counter()
+
 class GBNSender:
     def __init__(self, num_packets, N, k, timeout_sec, channel):
         self.num_packets = num_packets
@@ -140,10 +144,10 @@ print("GBN Implementation Faran Mukhtar - 24k-0646")
 num_packets= int(input("Enter number of packets: "))
 N= int(input ("Enter Window size(N): "))
 k= int(input ("Enter Sequence number bits(K): "))
-loss_prob=0.1
-corrupt_prob=0.1
-delay_prob=0.1
-delay_sec=0.2
+loss_prob=0
+corrupt_prob=0
+delay_prob=0
+delay_sec=0
 timeout_sec=0.8
 print("=" * 80)
 print(f"RUNNING GBN SIMULATION | Packets: {num_packets} | Window N: {N} | k-bits: {k} (mod {2**k})")
@@ -168,4 +172,7 @@ rec_thread.join()
 
 print("=" * 80)
 print(f"SUCCESS: All {num_packets} packets transmitted and delivered!")
+elapsed = time.perf_counter() - start
+print(f"Time elapsed: {elapsed}")
+
 print("=" * 80 + "\n")
