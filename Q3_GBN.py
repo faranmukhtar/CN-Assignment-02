@@ -1,23 +1,18 @@
 import random
+import socket
 import time
 import threading
-from queue import Queue, Empty
-from Q3_COMMON import Packet , UnreliableChannel
+from Q3_COMMON import Packet , UnreliableChannel , log , SENDER_ADDR , RECEIVER_ADDR , CHANNEL_ADDR
 # MY ROLE NUMBER IS 24k-0646 so seed is set to 646
 ROLL = 646
 
-import time
-
-start = time.perf_counter()
-
 class GBNSender:
-    def __init__(self, num_packets, N, k, timeout_sec, channel):
+    def __init__(self, num_packets, N, k, timeout_sec):
         self.num_packets = num_packets
         self.N = N  
-        self.k = k 
+        self.k = k  
         self.mod = 2 ** k
         self.timeout_sec = timeout_sec
-        self.channel = channel
 
         self.base = 0
         self.nextseqnum = 0
@@ -28,6 +23,13 @@ class GBNSender:
         self.lock = threading.Lock()
         self.timer = None
         self.running = False
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(SENDER_ADDR)
+        self.sock.settimeout(0.1)
+
+    def send_packet(self, pkt):
+        self.sock.sendto(pkt.to_bytes(), CHANNEL_ADDR)
 
     def start_timer(self):
         self.stop_timer()
@@ -43,12 +45,12 @@ class GBNSender:
         with self.lock:
             if self.total_acked >= self.num_packets:
                 return
-            self.channel.log(f"[TIMEOUT] GBN Timer expired for oldest unACKed packet (base={self.base})")
+            log(f"[TIMEOUT] GBN Timer expired for oldest unACKed packet (base={self.base})")
             self.start_timer()
             for idx in range(self.total_acked, self.packet_idx):
                 pkt = self.packets[idx]
-                self.channel.log(f"[RETRANSMIT] GBN Resending Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
-                self.channel.send_to_receiver(pkt)
+                log(f"[RETRANSMIT] GBN Resending Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
+                self.send_packet(pkt)
 
     def run(self):
         self.running = True
@@ -59,12 +61,12 @@ class GBNSender:
             with self.lock:
                 if (self.packet_idx - self.total_acked < self.N) and (self.packet_idx < self.num_packets):
                     pkt = self.packets[self.packet_idx]
-                    self.channel.log(f"[SEND] GBN Sender sent Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
+                    log(f"[SEND] GBN Sender sent Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
                     if self.total_acked == self.packet_idx:
                         self.start_timer()
                     self.packet_idx += 1
                     self.nextseqnum = self.packet_idx % self.mod
-                    self.channel.send_to_receiver(pkt)
+                    self.send_packet(pkt)
             time.sleep(0.01)
 
         self.stop_timer()
@@ -74,12 +76,13 @@ class GBNSender:
     def _listen_acks(self):
         while self.running or (self.total_acked < self.num_packets):
             try:
-                ack_packet = self.channel.to_sender_queue.get(timeout=0.1)
+                data, _ = self.sock.recvfrom(2048)
+                ack_packet = Packet.from_bytes(data)
                 if not ack_packet.verify_checksum():
-                    self.channel.log(f"[CORRUPT DISCARD] GBN Sender discarded corrupted ACK")
+                    log(f"[CORRUPT DISCARD] GBN Sender discarded corrupted ACK")
                     continue
 
-                self.channel.log(f"[ACK RECEIVE] GBN Sender received Cumulative ACK (ack={ack_packet.ack_num})")
+                log(f"[ACK RECEIVE] GBN Sender received Cumulative ACK (ack={ack_packet.ack_num})")
                 with self.lock:
                     match_idx = -1
                     for idx in range(self.total_acked, min(self.total_acked + self.N, self.num_packets)):
@@ -94,51 +97,57 @@ class GBNSender:
                                 self.base = self.packets[self.total_acked].seq_num
                             else:
                                 self.base = (self.packets[-1].seq_num + 1) % self.mod
+
                             if self.total_acked == self.packet_idx:
                                 self.stop_timer()
                             else:
                                 self.start_timer()
-            except Empty:
+            except socket.timeout:
                 continue
 
 
 class GBNReceiver:
-    def __init__(self, num_packets, k, channel):
+    def __init__(self, num_packets, k):
         self.num_packets = num_packets
         self.k = k
         self.mod = 2 ** k
-        self.channel = channel
         self.expectedseqnum = 0
         self.delivered_count = 0
         self.finished = False
 
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(RECEIVER_ADDR)
+        self.sock.settimeout(0.1)
+
+    def send_ack(self, ack):
+        self.sock.sendto(ack.to_bytes(), CHANNEL_ADDR)
+
     def run(self):
         while not self.finished:
             try:
-                pkt = self.channel.to_receiver_queue.get(timeout=0.1)
+                data, _ = self.sock.recvfrom(2048)
+                pkt = Packet.from_bytes(data)
                 if not pkt.verify_checksum():
-                    self.channel.log(f"[CORRUPT DISCARD] GBN Receiver discarded corrupted Packet (seq={pkt.seq_num})")
+                    log(f"[CORRUPT DISCARD] GBN Receiver discarded corrupted Packet (seq={pkt.seq_num})")
                     last_ack = (self.expectedseqnum - 1) % self.mod
-                    self.channel.send_to_sender(Packet(ack_num=last_ack, is_ack=True))
+                    self.send_ack(Packet(ack_num=last_ack, is_ack=True))
                     continue
 
-                self.channel.log(f"[RECEIVE] GBN Receiver got Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
+                log(f"[RECEIVE] GBN Receiver got Packet (seq={pkt.seq_num}, payload='{pkt.payload}')")
                 if pkt.seq_num == self.expectedseqnum:
-                    self.channel.log(f"[DELIVER] GBN Receiver delivered Packet (seq={pkt.seq_num}) to application")
+                    log(f"[DELIVER] GBN Receiver delivered Packet (seq={pkt.seq_num}) to application")
                     ack = Packet(ack_num=self.expectedseqnum, is_ack=True)
-                    self.channel.log(f"[ACK SEND] GBN Receiver sending Cumulative ACK (ack={self.expectedseqnum})")
+                    log(f"[ACK SEND] GBN Receiver sending Cumulative ACK (ack={self.expectedseqnum})")
                     self.expectedseqnum = (self.expectedseqnum + 1) % self.mod
                     self.delivered_count += 1
-                    self.channel.send_to_sender(ack)
+                    self.send_ack(ack)
                 else:
-                    self.channel.log(f"[DISCARD] GBN Receiver discarded out-of-order Packet (seq={pkt.seq_num}, expected={self.expectedseqnum})")
+                    log(f"[DISCARD] GBN Receiver discarded out-of-order Packet (seq={pkt.seq_num}, expected={self.expectedseqnum})")
                     last_ack = (self.expectedseqnum - 1) % self.mod
-                    self.channel.log(f"[ACK SEND] GBN Receiver re-sending duplicate ACK (ack={last_ack})")
-                    self.channel.send_to_sender(Packet(ack_num=last_ack, is_ack=True))
-            except Empty:
+                    log(f"[ACK SEND] GBN Receiver re-sending duplicate ACK (ack={last_ack})")
+                    self.send_ack(Packet(ack_num=last_ack, is_ack=True))
+            except socket.timeout:
                 continue
-
-
 
 print("GBN Implementation Faran Mukhtar - 24k-0646")
 num_packets= int(input("Enter number of packets: "))
@@ -157,22 +166,32 @@ print("=" * 80)
 random.seed(ROLL)
 channel = UnreliableChannel(loss_prob, corrupt_prob, delay_prob, delay_sec)
 
-sender = GBNSender(num_packets, N, k, timeout_sec, channel)
-receiver = GBNReceiver(num_packets, k, channel)
+sender = GBNSender(num_packets, N, k, timeout_sec)
+receiver = GBNReceiver(num_packets, k)
 
+chan_thread = threading.Thread(target=channel.run)
 rec_thread = threading.Thread(target=receiver.run)
 snd_thread = threading.Thread(target=sender.run)
 
+start = time.perf_counter()
+
+chan_thread.start()
 rec_thread.start()
 snd_thread.start()
 
 snd_thread.join()
 receiver.finished = True
 rec_thread.join()
+channel.running = False
+chan_thread.join()
+
+elapsed = time.perf_counter() - start
+sender.sock.close()
+receiver.sock.close()
+channel.sock.close()
 
 print("=" * 80)
 print(f"SUCCESS: All {num_packets} packets transmitted and delivered!")
-elapsed = time.perf_counter() - start
 print(f"Time elapsed: {elapsed}")
 
 print("=" * 80 + "\n")
