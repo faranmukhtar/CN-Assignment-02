@@ -136,6 +136,7 @@ class GBNReceiver:
 
 
 
+print("GBN Implementation Faran Mukhtar - 24k-0646")
 num_packets= int(input("Enter number of packets: "))
 N= int(input ("Enter Window size(N): "))
 k= int(input ("Enter Sequence number bits(K): "))
